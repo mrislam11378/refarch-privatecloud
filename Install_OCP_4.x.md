@@ -1,25 +1,9 @@
 # User Provisioned Installation of Red Hat OpenShift 4.x on VMware Virtual Infrastructure
 
-- [Introduction](#introduction)
-- [Terminology](#terminology)
-- [Preparation](#preparation)
-  - [Create the Installation Server](#create-the-installation-server)
-
-  - [Provision two new VMs to use as external load balancers](#provision-two-new-vms-to-use-as-external-load-balancers)
-  - [IBM Cloud Adoption Lab Users: Request a new subnet for your cluster](#ibm-cloud-adoption-lab-users-request-a-new-subnet-for-your-cluster)
-  - [Configure the DHCP server](#configure-the-dhcp-server)
-  - [Configure the DNS Server](#configure-the-dns-server)
-  - [Configure your haproxy nodes (load balancers)](#configure-your-haproxy-nodes-load-balancers)
-    - [Boot your nodes](#boot-your-nodes)
-  - [Remove bootstrap server from control plane load balancer](#remove-bootstrap-server-from-control-plane-load-balancer)
-  - [Login to the ocp cluster](#login-to-the-ocp-cluster)
-  - [Make sure all nodes are in Ready status](#make-sure-all-nodes-are-in-ready-status)
-  - [Make sure all controllers are up](#make-sure-all-controllers-are-up)
-  - [Configure Storage for the image-registry Operator](#configure-storage-for-the-image-registry-operator)
-  - [Ensure cluster is up and ready](#ensure-cluster-is-up-and-ready)
 - [User Provisioned Installation of Red Hat OpenShift 4.x on VMware Virtual Infrastructure](#user-provisioned-installation-of-red-hat-openshift-4x-on-vmware-virtual-infrastructure)
   - [Introduction](#introduction)
   - [Terminology](#terminology)
+  - [Basic Install Steps for VMware](#basic-install-steps-for-vmware)
   - [Preparation](#preparation)
     - [Create the Installation Server](#create-the-installation-server)
     - [VMware Installation Specifics](#vmware-installation-specifics)
@@ -28,7 +12,6 @@
       - [Configure vCenter and Create your Cluster Nodes](#configure-vcenter-and-create-your-cluster-nodes)
     - [Note the MAC addresses for all of your VMs.](#note-the-mac-addresses-for-all-of-your-vms)
     - [Provision your external load balancers](#provision-your-external-load-balancers)
-    - [IBM Cloud Adoption Lab Users: Request a new subnet for your cluster](#ibm-cloud-adoption-lab-users-request-a-new-subnet-for-your-cluster)
     - [Configure the DHCP server](#configure-the-dhcp-server)
     - [Configure the DNS Server](#configure-the-dns-server)
     - [Configure your haproxy nodes (load balancers)](#configure-your-haproxy-nodes-load-balancers)
@@ -66,7 +49,6 @@ For UPI, Red Had provides an installer for VMware environments which use vCenter
 
 This document will *not* describe doing an IPI installation.
 
-
 ## Terminology
 * __Host__ - A physical machine with a hypervisor installed which can be used to host one or more virtual machines.
 * __Server__ - A physical or virtual machine that is used to provide services to other machines.
@@ -92,25 +74,22 @@ In this guide we will use the following topology:
 Each installation will simply be represented by a new folder under your `/opt` directory for example.
  * There are several package managers available on Linux. If `yum` isn't available you can use `apt-get`
 
-<details>
-<summary>Basic Install Steps for VMware</summary>
+## Basic Install Steps for VMware
 
   1. Create an installation node (running RHEL 7 or 8) an with embedded web server (or reuse an existing server that you have used for a previous install - you can install multiple clusters with a single install server).
-  1. Download and deploy the rhcos template onto your vcenter server.
-  1. Download and explode the openshift installer onto your installation server.
-  1. Create the needed install-config.yaml file on your installation server.
-  1. Create the needed ignition files for your deployment
-  1. Deploy, but don't boot the bootstrap, control plane, and compute nodes.
-  1. Configure the DHCP server.
-  1. Configure DNS to support your cluster
-  1. Create or configure a load balancer for the control plane
-  1. Create or configure a load balancer for the compute nodes.
-  1. Complete the bootstrap process
-  1. Configure persistent storage for your image registry
-  1. Complete installation
-  1. Login to your new cluster and configure authentication
-
-</details>
+  2. Download and deploy the rhcos template onto your vcenter server.
+  3. Download and explode the openshift installer onto your installation server.
+  4. Create the needed install-config.yaml file on your installation server.
+  5. Create the needed ignition files for your deployment
+  6. Deploy, but don't boot the bootstrap, control plane, and compute nodes.
+  7. Configure the DHCP server.
+  8. Configure DNS to support your cluster
+  9. Create or configure a load balancer for the control plane
+  10. Create or configure a load balancer for the compute nodes.
+  11. Complete the bootstrap process
+  12. Configure persistent storage for your image registry
+  13. Complete installation
+  14. Login to your new cluster and configure authentication
 
 <br>
 We will discuss each of these in turn in the rest of this document.
@@ -125,168 +104,151 @@ We will discuss each of these in turn in the rest of this document.
 
 1. Disable the firewall and selinux (or open a hole for port 80)
 
-  ```
-  # Stop the firewall and set selinux to passive
-  systemctl stop firewalld
-  setenforce 0
+    ```bash
+    # Stop the firewall and set selinux to passive
+    systemctl stop firewalld
+    setenforce 0
 
-  # make changes persist over a reboot
-  systemctl disable firewalld
-  sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
-  ```
+    # make changes persist over a reboot
+    systemctl disable firewalld
+    sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+    ```
 
 1. Create a directory for your new cluster.  In this document I will use a cluster named after my userid `vhavard`.
 
-  ```
-  mkdir /opt/vhavard
-  ```
+    ```bash
+    mkdir /opt/vhavard
+    ```
 
 1. Install the httpd web server
 
-  ```
-  yum install -y httpd
-  ```
+    ```bash
+    yum install -y httpd
+    ```
 
-  This will create a document root of /var/www/html.  Create a softlink from the document root to your project directory.
+    This will create a document root of /var/www/html.  Create a softlink from the document root to your project directory.
 
-  ```
-  ln -s /opt/vhavard /var/www/html/vhavard
-  ```
+    ```bash
+    ln -s /opt/vhavard /var/www/html/vhavard
+    ```
 
-1.  Download the OpenShift client and installer and explode it into your /opt directory.  Use your browser to follow the following link and download the client and installer tarballs for the latest release version
+1. Download the OpenShift client and installer and explode it into your /opt directory.  Use your browser to follow the following link and download the client and installer tarballs for the latest release version
 
-  https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/
+    <https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/>
 
-  Explode the files into /opt (replace the x's in the command below with the version number you are exploding):
+    Explode the files into /opt (replace the x's in the command below with the version number you are exploding):
   
-  ```
-  cd /opt
-  gunzip -c openshift-client-linux-4.x.x.tar.gz |tar -xvf -
-  gunzip -c openshift-install-linux-4.x.x.tar.gz |tar -xvf -
-  ```
+    ```bash
+    cd /opt
+    gunzip -c openshift-client-linux-4.x.x.tar.gz |tar -xvf -
+    gunzip -c openshift-install-linux-4.x.x.tar.gz |tar -xvf -
+    ```
 
-  Now copy the `oc` and `kubectl` binaries into your path
-  ```
-  sudo cp oc /usr/local/bin/
-  sudo cp kubectl /usr/local/bin/
-  ```
+    Now copy the `oc` and `kubectl` binaries into your path
 
-2. Create an ssh key for your primary user
+    ```bash
+    sudo cp oc /usr/local/bin/
+    sudo cp kubectl /usr/local/bin/
+    ```
 
-  ```
-  ssh-keygen -t rsa -b 4096 -N ''
-  ```
+2. Create an ssh key for your primary user and accept the default location for the file.
 
-  Accept the default location for the file.
+    ```bash
+    ssh-keygen -t rsa -b 4096 -N ''
+    ```
 
 1. Start the ssh agent
 
-  ```
-  eval "$(ssh-agent -s )"
-  ```
+    ```bash
+    eval "$(ssh-agent -s )"
+    ```
 
 1. Add your private key to the ssh-agent
 
-  ```
-  ssh-add ~/.ssh/id_rsa
-  ```
+    ```bash
+    ssh-add ~/.ssh/id_rsa
+    ```
 
 1. You will need a pull secret so your cluster can download the needed containers.  Get your pull secret from https://cloud.redhat.com/openshift/install/vsphere/user-provisioned and put it into a file in your /opt directory (e.g. pull-secret.txt).  You will need this in the next step.
 
 1. In your project directory, create a file named `install-config.yaml` with the following contents (_expand the section for your target environment_):
+  **IMPORTANT:** _Replace values in square brackets in the text below (including the square brackets) with values from your environment._
 
-  <details>
-  <summary>VMware Environment</summary>
+    ```yaml
+    apiVersion: v1
+    baseDomain: [ocp.csplab.local]
+    compute:
+    - hyperthreading: Enabled   
+      name: worker
+      replicas: 0
+    controlPlane:
+      hyperthreading: Enabled   
+      name: master
+      replicas: 3
+    metadata:
+      name: [vhavard]
+    platform:
+      vsphere:
+        vcenter: [demo-vcenter.csplab.local]
+        username: [username]
+        password: [password]
+        datacenter: [CSPLAB]
+        defaultDatastore: [SANDBOX-OCS]
+    pullSecret: '[contents of pull-secret.txt]'
+    sshKey: '[contents of ~/.ssh/id_rsa.pub]'
+    ```
 
-  <br><b>IMPORTANT:</b> _Replace values in square brackets in the text below (including the square brackets) with values from your environment._
+     - **baseDomain** - You will access applications in your cluster through a subdomain of this domain which is named after your cluster.  For example, I use my userid (vhavard) as my cluster name, and my base domain is ocp.csplab.local, therefore, my cluster's domain will be vhavard.ocp.csplab.local.
 
-  ```yaml
-  apiVersion: v1
-  baseDomain: [ocp.csplab.local]
-  compute:
-  - hyperthreading: Enabled   
-    name: worker
-    replicas: 0
-  controlPlane:
-    hyperthreading: Enabled   
-    name: master
-    replicas: 3
-  metadata:
-    name: [vhavard]
-  platform:
-    vsphere:
-      vcenter: [demo-vcenter.csplab.local]
-      username: [username]
-      password: [password]
-      datacenter: [CSPLAB]
-      defaultDatastore: [SANDBOX-OCS]
-  pullSecret: '[contents of pull-secret.txt]'
-  sshKey: '[contents of ~/.ssh/id_rsa.pub]'
-  ```
+     - **metadata.name** - This is the name of your cluster, it <strong>must</strong> match the name of your folder on the install node.
 
-  * **baseDomain** - You will access applications in your cluster through a subdomain of this domain which is named after your cluster.  For example, I use my userid (vhavard) as my cluster name, and my base domain is ocp.csplab.local, therefore, my cluster's domain will be vhavard.ocp.csplab.local.
+     - **platform.vsphere.vcenter** - This is the hostname or IP address of your vsphere server.
 
-  * **metadata.name** - This is the name of your cluster, it <strong>must</strong> match the name of your folder on the install node.
+     - **platform.vsphere.userna**me - This is a valid user in vsphere with permissions to deploy vApps and add items to the datastore.
 
-  * **platform.vsphere.vcenter** - This is the hostname or IP address of your vsphere server.
+     - **platform.vsphere.password** - The password for the username specified above (this file will be deleted when the installer creates the ignition files).
 
-  * **platform.vsphere.userna**me - This is a valid user in vsphere with permissions to deploy vApps and add items to the datastore.
+     - **platform.vsphere.datacenter** - The datacenter under which files should be created.
 
-  * **platform.vsphere.password** - The password for the username specified above (this file will be deleted when the installer creates the ignition files).
+     - **platform.vsphere.defaultDatastore** - The datastore on which files should be stored.  A storage class will be created on your openshift cluster for dynamic storage provisioning to this datastore.  **IMPORTANT:** At the time of this writing, OCP 4.x does not support using a datastore cluster as the target of the vsphere storage provider.  The value for this keyword must be a datastore and not a datstore cluster.
 
-  * **platform.vsphere.datacenter** - The datacenter under which files should be created.
+     - **pullSecret** - The contents of the pull secret you got from the Red Hat URL noted above.
 
-  * **platform.vsphere.defaultDatastore** - The datastore on which files should be stored.  A storage class will be created on your openshift cluster for dynamic storage provisioning to this datastore.  **IMPORTANT:** At the time of this writing, OCP 4.x does not support using a datastore cluster as the target of the vsphere storage provider.  The value for this keyword must be a datastore and not a datstore cluster.
-
-  * **pullSecret** - The contents of the pull secret you got from the Red Hat URL noted above.
-
-  * **sshKey** - The contents of ~/.ssh/id_rsa.pub
-  </details>
+     - **sshKey** - The contents of ~/.ssh/id_rsa.pub
 
 2. Create your manifest files
-
   **NOTE:** The file you created in the previous step (install-config.yaml) will be automatically deleted in the next steps.  If you want to keep it for future use, make a backup of it now or you will have to re-create it for each additional cluster you install.
 
-  ```
-  cd /opt
-  ./openshift-install create manifests --dir=./vhavard
-  ```
+    ```
+    cd /opt
+    ./openshift-install create manifests --dir=./vhavard
+    ```
 
-  Where dir is the name of your cluster - the directory you created in step 3 above.
+    Where dir is the name of your cluster - the directory you created in step 3 above.<br>
+    This will create a number of .yaml files in a couple of directories which you can use to change the default installation of your cluster.<br>
+    Of particular note is the manifests/cluster-config.yaml file where you can change the default networking subnets.  See the `bare metal` section of the install-config.yaml section above (step 11) for information on how to set these values if you need/want to change them.  Note that the subnets in this section must be valid for your environment meaning these subnets must not already exist in your environment, but will not (unless explicitly reconfigured) be routed outside of the cluster.<br>
+    **You will need to edit manifests/cluster-scheduler-02-config.yml file and change the value of spec.mastersSchedulable to false.** <br>
+    This will make sure the cluster doesn't try to put your applications on master nodes.  Red Hat assumes that at some point in the future kubernetes will allow this and you may want to leave it true so you can use your control plane nodes as compute nodes as well.
 
-  This will create a number of .yaml files in a couple of directories which you can use to change the default installation of your cluster.
-
-  Of particular note is the manifests/cluster-config.yaml file where you can change the default networking subnets.  See the `bare metal` section of the install-config.yaml section above (step 11) for information on how to set these values if you need/want to change them.  Note that the subnets in this section must be valid for your environment meaning these subnets must not already exist in your environment, but will not (unless explicitly reconfigured) be routed outside of the cluster.
-
-  **You will need to edit manifests/cluster-scheduler-02-config.yml file and change the value of spec.mastersSchedulable to false.**
-
-  This will make sure the cluster doesn't try to put your applications on master nodes.  Red Hat assumes that at some point in the future kubernetes will allow this and you may want to leave it true so you can use your control plane nodes as compute nodes as well.
-
-1.  Create your ignition files
-
+1. Create your ignition files
   <strong>Note:</strong> The installer will create ignition files from these manifest files and then delete the manifest files.  If you would like to keep a copy of these files, make a backup of them before taking the next step.
 
-  ```
-  cd /opt
-  ./openshift-install create ignition-configs --dir=./vhavard
-  ```
+    ```bash
+    cd /opt
+    ./openshift-install create ignition-configs --dir=./vhavard
+    ```
 
-  Where vhavard is the name of your cluster just as in the previous step.
+    Where vhavard is the name of your cluster just as in the previous step.
 
-1. Environment-specific configurations
+    **STORAGE NOTE:** If you are going to be installing rook/Ceph or Gluster storage you may also want to consider adding additional compute nodes to use as storage nodes.  If using separate storage nodes for Ceph, provision three additional nodes (minimum, but can be more) and name them appropriately (e.g. storage-0, storage-1, storage-2).  These should be provisioned exactly like compute nodes with the exception of the extra disk as noted below.
 
-  <strong>STORAGE NOTE:</strong> If you are going to be installing rook/Ceph or Gluster storage you may also want to consider adding additional compute nodes to use as storage nodes.  If using separate storage nodes for Ceph, provision three additional nodes (minimum, but can be more) and name them appropriately (e.g. storage-0, storage-1, storage-2).  These should be provisioned exactly like compute nodes with the exception of the extra disk as noted below.
+    Alternatively, you can also just use all compute nodes as storage nodes without designating them separately.  When doing this for Ceph storage you must have a minimum of three.  In this document we will assume there are three separate storage nodes.
 
-  Alternatively, you can also just use all compute nodes as storage nodes without designating them separately.  When doing this for Ceph storage you must have a minimum of three.  In this document we will assume there are three separate storage nodes.
+    All nodes which will also be used as storage nodes will need a second hard disk provisioned (the installer will only use /dev/sda).  This second hard disk will be /dev/sdb and will be used by Ceph when installing the Ceph storage cluster.  You can also add more than one additional disk to be used by the Ceph storage cluster, but only one is required.
 
-  All nodes which will also be used as storage nodes will need a second hard disk provisioned (the installer will only use /dev/sda).  This second hard disk will be /dev/sdb and will be used by Ceph when installing the Ceph storage cluster.  You can also add more than one additional disk to be used by the Ceph storage cluster, but only one is required.
+### VMware Installation Specifics
 
-  <details>
-  <summary>Configure VMware Environment</summary>
-
-  ###  VMware Installation Specifics
-
-  #### Create the 'append-bootstrap.ign' File
+#### Create the 'append-bootstrap.ign' File
 
   The bootstrap.ign file is too large to be used when deploying the VMs as documented below so you will need to create a smaller file which will cause the VMware server to grab this file from the webserver you configured on the installation server.  Because we created a softlink for our project folder, the file is already accessible for download.  We just need to create the `append-bootstrap.ign` file for use when we deploy our bootstrap node.
 
@@ -347,8 +309,6 @@ We will discuss each of these in turn in the rest of this document.
   <strong>NOTE:</strong> You will need at the very least, 1 bootstrap node, and 3 control plane (master) nodes, and 2 compute (worker) nodes.  It is recommended that you use exactly 3 control plane nodes and a minimum of 2 compute nodes.  
 
   With a browser, login to your vCenter server.  You will need to create a folder with the same name as your cluster.  This folder may be under any path and any number of levels deep, but the folder name must be unique in the datacenter, otherwise the installation will fail.
-
-
   Find your previously uploaded rhcos template and create your bootstrap node.  Right-click on the template and click "New VM from this Template".
 
   ![Create VM from Template](/images/vm-from-template.png "Create VM from Template")
@@ -417,36 +377,24 @@ We will discuss each of these in turn in the rest of this document.
   Make a note of the MAC address for each cluster node.
 
   ![mac-address](/images/mac-address.png "MAC address")
-  </details>
 
 ### Provision your external load balancers
 
-1. In the csplab, use the template named ubuntu1604-combined-haproxy-template to use a single load balancer for both the control and compute plans, or use the rhel8-control-haproxy-template and rhel8-compute-haproxy-template, respectively, in the sandbox datastore to instantiate two new VMs, one for the control plane and one for the compute plane.  
+- In the csplab, use the template named ubuntu1604-combined-haproxy-template to use a single load balancer for both the control and compute plans, or use the rhel8-control-haproxy-template and rhel8-compute-haproxy-template, respectively, in the sandbox datastore to instantiate two new VMs, one for the control plane and one for the compute plane.  
 
-... or ...
+  ... or ...
 
-1. Otherwise, install any linux VM you choose, in our example, we will use RHEL 8.0.
+- Otherwise, install any linux VM you choose, in our example, we will use RHEL 8.0.
 
-  * Name your VMs for their purpose, e.g. `ocp-42-control-lb`, `ocp-42-compute-lb`.
+  - Name your VMs for their purpose, e.g. `ocp-42-control-lb`, `ocp-42-compute-lb`.
 
-  * Install the haproxy packages on the VMs
+  - Install the haproxy packages on the VMs
 
-    ```
+    ```bash
     yum install -y haproxy
     ```
 
-1. You will configure your load balancers when you get your IP addresses assigned.
-
-
-### IBM Cloud Adoption Lab Users: Request a new subnet for your cluster
-
-IBM employees who are deploying a cluster into the IBM Cloud Adoption Lab's OCP environment you will need to be assigned a subnet.  Send an email to the csplab-admin mailing list to request the subnet.
-
-When you request your subnet, provide the MAC address for each of your cluster nodes including the 2 load balancers.
-
-The lab admins will configure the DHCP and DNS servers and router for your assigned subnet.
-
-If you are deploying into the IBM Cloud Adoption Lab you can ignore the steps `Configure DHCP Server` and `Configure DNS Server` sections, these will be done for you.
+- You will configure your load balancers when you get your IP addresses assigned.
 
 ### Configure the DHCP server
 
