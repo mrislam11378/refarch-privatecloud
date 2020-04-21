@@ -17,6 +17,28 @@
   - [Make sure all controllers are up](#make-sure-all-controllers-are-up)
   - [Configure Storage for the image-registry Operator](#configure-storage-for-the-image-registry-operator)
   - [Ensure cluster is up and ready](#ensure-cluster-is-up-and-ready)
+- [User Provisioned Installation of Red Hat OpenShift 4.x on VMware Virtual Infrastructure](#user-provisioned-installation-of-red-hat-openshift-4x-on-vmware-virtual-infrastructure)
+  - [Introduction](#introduction)
+  - [Terminology](#terminology)
+  - [Preparation](#preparation)
+    - [Create the Installation Server](#create-the-installation-server)
+    - [VMware Installation Specifics](#vmware-installation-specifics)
+      - [Create the 'append-bootstrap.ign' File](#create-the-append-bootstrapign-file)
+      - [Create the RHCOS Template in vSphere](#create-the-rhcos-template-in-vsphere)
+      - [Configure vCenter and Create your Cluster Nodes](#configure-vcenter-and-create-your-cluster-nodes)
+    - [Note the MAC addresses for all of your VMs.](#note-the-mac-addresses-for-all-of-your-vms)
+    - [Provision your external load balancers](#provision-your-external-load-balancers)
+    - [IBM Cloud Adoption Lab Users: Request a new subnet for your cluster](#ibm-cloud-adoption-lab-users-request-a-new-subnet-for-your-cluster)
+    - [Configure the DHCP server](#configure-the-dhcp-server)
+    - [Configure the DNS Server](#configure-the-dns-server)
+    - [Configure your haproxy nodes (load balancers)](#configure-your-haproxy-nodes-load-balancers)
+      - [Boot your nodes](#boot-your-nodes)
+  - [Remove bootstrap server from control plane load balancer](#remove-bootstrap-server-from-control-plane-load-balancer)
+  - [Login to the ocp cluster](#login-to-the-ocp-cluster)
+  - [Make sure all nodes are in Ready status](#make-sure-all-nodes-are-in-ready-status)
+  - [Make sure all controllers are up](#make-sure-all-controllers-are-up)
+  - [Configure Storage for the image-registry Operator](#configure-storage-for-the-image-registry-operator)
+  - [Ensure cluster is up and ready](#ensure-cluster-is-up-and-ready)
 - [Post-Install Tasks to Have a Usable Cluster](#post-install-tasks-to-have-a-usable-cluster)
 - [Appendix A - Example DNS Configuration](#appendix-a---example-dns-configuration)
   - [named.conf.local](#namedconflocal)
@@ -36,15 +58,14 @@ Installing OpenShift (OCP) 4.x requires a significant amount of pre-planning and
 
 In this guide we will install a small OpenShift 4.2 instance.  We will use an installation server with an embedded web server.  Our cluster will consist of a bootstrap node, 3 master nodes, 3 worker nodes, 2 load balancers.  The installation server and bootstrap server can be deleted when the installation is complete, however you may want to keep the installation server around for future installs.
 
-This document will contain information for installing in a VMware vSphere environment as well as in a "bare metal" environment.  The reason "bare metal" is in quote is that this installation method will work with any hypervisor/cloud provider.
+This document will contain information for installing in a VMware vSphere environment.
 
 OCP has specific installers for a number of cloud providers (AWS, Google, IBM Cloud, Azure) known as Installer Provisioned Infrastructure (or IPI) and a separate mechanism for using User Provisioned Infrastructure (UPI).
 
-For UPI, Red Had provides an installer for VMware environments which use vCenter Server and also for bare metal.  If you have any other hypervisor in your on-prem environment than VMware (e.g. KVM or Nutanix) you can use the bare metal installer even though the platform is not technically bare metal.  You will do the installation as though it were bare metal.  You can also use this installer if you want to do an actual bare metal install. :-)
+For UPI, Red Had provides an installer for VMware environments which use vCenter Server.
 
-This document will *not* describe doing an IPI installation, but you can still use the bare metal installation method in those environments if you so desire.
+This document will *not* describe doing an IPI installation.
 
-Many of the steps to install OCP 4x in a UPI environment are common regardless of your hypervisor or bare metal infrastructure. To make the document more readable, there are collapsible sections for details of the specific environment you are trying to use, VMware or Bare Metal.  Open the expand the appropriate sections for the type of environment you are deploying.
 
 ## Terminology
 * __Host__ - A physical machine with a hypervisor installed which can be used to host one or more virtual machines.
@@ -88,26 +109,9 @@ Each installation will simply be represented by a new folder under your `/opt` d
   1. Configure persistent storage for your image registry
   1. Complete installation
   1. Login to your new cluster and configure authentication
+
 </details>
 
-<details>
-<summary>Basic Install Steps for Bare Metal</summary>
-
-  1. Create an installation node (running RHEL 7 or 8) an with embedded web server (or reuse an existing server that you have used for a previous install - you can install multiple clusters with a single install server).
-  1. Download and deploy the .img and metal config files from Red Hat.
-  1. Download and explode the openshift installer onto your installation server.
-  1. Create the needed install-config.yaml file on your installation server.
-  1. Create the needed ignition files for your deployment
-  1. Configure the DHCP server
-  1. Configure the PXE server.
-  1. Configure DNS to support your cluster
-  1. Create or configure a load balancer for the control plane
-  1. Create or configure a load balancer for the compute nodes.
-  1. Complete the bootstrap process
-  1. Configure persistent storage for your image registry
-  1. Complete installation
-  1. Login to your new cluster and configure authentication
-</details>
 <br>
 We will discuss each of these in turn in the rest of this document.
 
@@ -153,11 +157,6 @@ We will discuss each of these in turn in the rest of this document.
 
   https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/
 
-  Or, if you are in the IBM Cloud Adoption Lab you can get it from:
-
-  http://storage4.csplab.local/storage/ocp/
-
-
   Explode the files into /opt (replace the x's in the command below with the version number you are exploding):
   
   ```
@@ -172,7 +171,7 @@ We will discuss each of these in turn in the rest of this document.
   sudo cp kubectl /usr/local/bin/
   ```
 
-1. Create an ssh key for your primary user
+2. Create an ssh key for your primary user
 
   ```
   ssh-keygen -t rsa -b 4096 -N ''
@@ -244,57 +243,7 @@ We will discuss each of these in turn in the rest of this document.
   * **sshKey** - The contents of ~/.ssh/id_rsa.pub
   </details>
 
-  <details>
-  <summary>Bare Metal Environment</summary>
-
-  <br><b>IMPORTANT:</b> _Replace values in square brackets in the text below (including the square brackets) with values from your environment._
-
-  ```yaml
-  apiVersion: v1
-  baseDomain: [ocp.csplab.local]
-  compute:
-  - hyperthreading: Enabled
-    name: worker
-    replicas: 0
-  controlPlane:
-    hyperthreading: Enabled
-    name: master
-    replicas: 3
-  metadata:
-    name: [baremetal]
-  networking:
-    clusterNetworks:
-    - cidr: [10.253.0.0/16]
-      hostPrefix: [23]
-    networkType: OpenShiftSDN
-    serviceNetwork:
-    - [172.30.0.0/16]
-  platform:
-    none: {}
-  pullSecret: '[pull-secret]'
-  sshKey: '[ssh-key]'
-  ```
-
-  * **baseDomain** - You will access applications in your cluster through a subdomain of this domain which is named after your cluster.  For example, I use my userid (vhavard) as my cluster name, and my base domain is ocp.csplab.local, therefore, my cluster's domain will be vhavard.ocp.csplab.local.
-
-  * **metadata.name** - This is the name of your cluster.
-
-  * **networking.clusterNetworks.cidr** - Use a valid network for your environment.  This should not conflict with any existing subnet in your environment.
-
-  * **networking.clusterNetworks.networkPrefix** - This value specifies the size of the network to assign to each node for pod IP addresses.  For example, a /23 prefix represents 512 IP addresses, so a hostPrefix of /23 means that control-plane-1 (master1) will have 512 IP addresses available, as will control-plane-2, compute1, compute2, etc.<br><br>
-  If you are using a class B network for the clusterNetwork (a /16 prefix) you have a total of 255^255 usable IP addresses. Since the lowest and highest IP addresses are assigned to the subnet name and broadcast address, respectively they are not assignable leaving 65534 addressable IP addresses in a Class B subnet.<br><br>
-  If we are using a class B subnet we have 65535 total IP addresses to use over 6 nodes.  That's 19,922 IP addresses, but subnets must divided along powers of two, so you could set this value to *19* which would allow for 8190 usable IP addresses per node.  If we use 19, however, we would not be able to add any additional nodes because we would not have any addresses available for the new node.<br><br>
-  On the other hand, if we are planning to expand the cluster to as many as 100 nodes in the future, we can set this value to 23 which will allow 512 IP addresses per node for up to 100 total nodes (the highest power of 2 which is lower than 65535/100).
-
-  * **networking.serviceNetwork** - The network CIDR to assign for services.  This is not assigned per node as is the clusterNetwork, so there it no separate prefix number.
-
-  * **pullSecret** - The contents of the pull secret you got from the Red Hat URL noted above.
-
-  * **sshKey** - The contents of ~/.ssh/id_rsa.pub
-  </details>
-  <br>
-
-1. Create your manifest files
+2. Create your manifest files
 
   **NOTE:** The file you created in the previous step (install-config.yaml) will be automatically deleted in the next steps.  If you want to keep it for future use, make a backup of it now or you will have to re-create it for each additional cluster you install.
 
@@ -468,82 +417,6 @@ We will discuss each of these in turn in the rest of this document.
   Make a note of the MAC address for each cluster node.
 
   ![mac-address](/images/mac-address.png "MAC address")
-  </details>
-
-  <details>
-  <summary>Configure the Bare Metal Environment</summary>
-
-  ### Bare Metal Installation Specifics
-  Installation of OCP in a bare metal environment requires either mounting an .iso to the local machine to install the operating system or installing via PXE (Pre-eXecution Environment).  In this tutorial, we will use a legacy PXE server.
-
-  Installation of a PXE server is beyond the scope of this document.  If no PXE server exists in the environment one should be created.
-
-  #### Create (but don't boot) your cluster nodes
-  Before you can configure the PXE and DHCP servers, you will need to know the MAC addresses of all the nodes in your cluster.  Since we will be using virtual machines rather than bare metal servers, we will need to first create the VMs on the hypervisor.
-
-  Assuming the environment is KVM, use `virt-manager` or `virsh` to create a VM for each node that will be a part of your cluster.  Make note of the MAC address of each node and what type of node it should be (bootstrap, control plane (master), compute (worker)).
-
-  See the table below for recommended sizing of the various nodes:
-
-  | Node Type | CPU | Memory |  Disk[s] | Purpose |
-  |:---------:|:---:|:-------|:--------:|:--------|
-  | Bootstrap |  4  | 16Gi   | 120GB    | Bootstrap Node |
-  | Control   |  4  | 16Gi   | 120GB    | Master Nodes |
-  | Compute   |  2  | 8Gi    | 120GB    | Worker Nodes |
-  | Compute   | 16  | 64Gi   | 120GB, 500GB | Storage Nodes |
-
-  #### Configure the PXE server
-  There are three files you will need for a PXE install:
-    * rhcos-4.2.0-x86_64-installer-initramfs.img
-    * rhcos-4.2.0-x86_64-installer-kernel
-    * rhcos-4.2.0-x86_64-metal-bios.raw.gz
-
-  <br>On your <strong>installation/web server machine</strong>, change to your project folder and download the metal-bios file from the Red Hat download site:
-
-  ```
-  cd /opt/vhavard
-  wget -c https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.2/latest/rhcos-4.2.0-x86_64-metal-bios.raw.gz
-  ```
-
-  On the <strong>PXE server</strong>, you will need the other two files.
-
-  In this document we will assume that the tftpboot path is /tftpboot.
-
-  Create a new subdirectory named "rhcos" under /tftpboot.  Download the other two files to this directory:
-
-  ```
-  mkdir -p /tftpboot/rhcos
-  cd /tftpboot/rhcos
-  wget -c https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.2/latest/rhcos-4.2.0-x86_64-installer-initramfs.img
-  wget -c https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.2/latest/rhcos-4.2.0-x86_64-installer-kernel
-  ```
-
-  Under the /tftpboot directory should be a subdirectory named pxelinux.cfg.  For a streamlined installation, we will not use a menu-based installation.  Instead, we will use the MAC address of the VM to specify the exact configuration which should be applied to the VM and it will be automatically applied at boot time.
-
-  To create a custom installation configuration for a VM, you must create a file named for the MAC address of the VM in the /tftpboot/pxelinux.cfg/ directory.
-
-  The format of the filename is <address-type>-<xx-xx-xx-xx-xx-xx> where <address-type> is "01" for ARP and "xx-xx-xx-xx-xx-xx" represents the mac address of the VM with each "xx" being an octet of the mac address.  For example, "01-00-50-56-a5-bc-2d".
-
-  The file should have the following contents:
-
-  <strong>IMPORTANT:</strong> Replace the URL in square brackets (removing the square brackets) with the URL of the metal-bios file you downloaded to your installation/web server and the URL of the bootstrap.ign ignition file, respectively.
-
-  ```
-  DEFAULT pxeboot
-  TIMEOUT 20
-  PROMPT 0
-  LABEL pxeboot
-      KERNEL rhcos/rhcos-4.2.0-x86_64-installer-kernel
-      APPEND ip=dhcp rd.neednet=1 initrd=rhcos/rhcos-4.2.0-x86_64-installer-initramfs.img console=tty0 console=ttyS0 coreos.inst=yes coreos.inst.install_dev=sda coreos.inst.image_url=[http://172.18.1.30/pxetest/rhcos-4.2.0-x86_64-metal-bios.raw.gz] coreos.inst.ignition_url=[http://172.18.1.30/pxetest/bootstrap.ign]
-  ```
-
-  Create a file for each of the nodes in your cluster, with each file pointing to the correct ignition file for the the type of node to which it should apply.
-
-  For example, if your bootstrap node's mac address is 00:50:56:a5:2a:63, you will create a file named `01-00-50-56-a5-2a-63` with the contents noted above.
-
-  If the node were a master node the file contents would be identical, but the ignition_url location would be the URL for the master.ign file, and the path for a worker node would be the same, but point to worker.ign on that same server.
-
-  When all of the files have been created, double check to make sure there are no typos.  There is no need to restart the service, changes are picked up immediately.
   </details>
 
 ### Provision your external load balancers
@@ -1841,14 +1714,13 @@ Add a node to an existing 4.2 cluster with a CoreOS node
   1. Add DNS records to nameserver
   1. Prepare the machine/VM
     * VMware Only: Add a new VM from the template and put the base64 encoded worker.ign file into the vApp properties
-    * Bare Metal Only: Add the mac addresses to the PXE server with the worker stansas
-1. Boot the VM and allow it to go through its entire installation installation process
-1. If it has been more than an hour since the ign files were created, the certificates will not automatically be approved.  Login to your cluster from  your installation server and issue `oc get csr` to list pending certificate signing requests.
-1. Install the `jq` command using yum: `yum install -y jq`
-1. Approve all pending requests: `oc get csr -ojson | jq -r '.items[] | select(.status == {} ) | .metadata.name' | xargs oc adm certificate approve`.
-1. Recheck pending requests to see if any more have arrived `oc get csr`
-1. Repeat the above command to approve all pending requests and repeat until all requests are approved.
-1. Check node status: `oc get nodes`.  The new node[s] should exist in the cluster.  
+2. Boot the VM and allow it to go through its entire installation installation process
+3. If it has been more than an hour since the ign files were created, the certificates will not automatically be approved.  Login to your cluster from  your installation server and issue `oc get csr` to list pending certificate signing requests.
+4. Install the `jq` command using yum: `yum install -y jq`
+5. Approve all pending requests: `oc get csr -ojson | jq -r '.items[] | select(.status == {} ) | .metadata.name' | xargs oc adm certificate approve`.
+6. Recheck pending requests to see if any more have arrived `oc get csr`
+7. Repeat the above command to approve all pending requests and repeat until all requests are approved.
+8. Check node status: `oc get nodes`.  The new node[s] should exist in the cluster.  
   * If they do not, troubleshoot compute node installation as per a new installation.
   * If they are in a 'NotReady' state, wait for installation to complete and recheck until they are in a 'Ready' state: `watch -n5 oc get nodes`
 1. Once the status changes to "Ready" the new compute node is ready for use.
