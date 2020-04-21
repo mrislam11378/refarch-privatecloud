@@ -10,7 +10,7 @@
   - [Create the RHCOS Template in vSphere](#create-the-rhcos-template-in-vsphere)
   - [Configure vCenter and Create your Cluster Nodes](#configure-vcenter-and-create-your-cluster-nodes)
   - [Note the MAC addresses for all of your VMs.](#note-the-mac-addresses-for-all-of-your-vms)
-  - [Provision your external load balancers](#provision-your-external-load-balancers)
+  - [Provision your external load balancer(s)](#provision-your-external-load-balancers)
   - [Configure the DHCP server](#configure-the-dhcp-server)
   - [Configure the DNS Server](#configure-the-dns-server)
   - [Configure your haproxy nodes (load balancers)](#configure-your-haproxy-nodes-load-balancers)
@@ -29,6 +29,9 @@
 - [Appendix B - Example DHCP configuration](#appendix-b---example-dhcp-configuration)
   - [dhcpd.conf](#dhcpdconf)
 - [Appendix C - Example haproxy comfiguration](#appendix-c---example-haproxy-comfiguration)
+  - [Control plane haproxy.conf](#control-plane-haproxyconf)
+  - [Compute haproxy.conf](#compute-haproxyconf)
+  - [Combined haproxy.conf](#combined-haproxyconf)
 - [Appendix D - Useful Ceph Commands](#appendix-d---useful-ceph-commands)
   - [Gaining access to the rook/Ceph toolbox container](#gaining-access-to-the-rookceph-toolbox-container)
   - [Dealing with the `Too FEW PGs` warning](#dealing-with-the-too-few-pgs-warning)
@@ -253,7 +256,7 @@ The networking requirements are specified here <https://docs.openshift.com/conta
 
     All nodes which will also be used as storage nodes will need a second hard disk provisioned (the installer will only use /dev/sda).  This second hard disk will be /dev/sdb and will be used by Ceph when installing the Ceph storage cluster.  You can also add more than one additional disk to be used by the Ceph storage cluster, but only one is required.
 
-1. Create the 'append-bootstrap.ign' File
+1. Create the `append-bootstrap.ign` File
 
     The bootstrap.ign file is too large to be used when deploying the VMs as documented below so you will need to create a smaller file which will cause the VMware server to grab this file from the webserver you configured on the installation server.  Because we created a softlink for our project folder, the file is already accessible for download.  We just need to create the `append-bootstrap.ign` file for use when we deploy our bootstrap node.
 
@@ -385,7 +388,7 @@ The networking requirements are specified here <https://docs.openshift.com/conta
 
   ![mac-address](/images/mac-address.png "MAC address")
 
-### Provision your external load balancers
+### Provision your external load balancer(s)
 
 - In the csplab, use the template named ubuntu1604-combined-haproxy-template to use a single load balancer for both the control and compute plans, or use the rhel8-control-haproxy-template and rhel8-compute-haproxy-template, respectively, in the sandbox datastore to instantiate two new VMs, one for the control plane and one for the compute plane.  
 
@@ -471,67 +474,116 @@ Once you have IP addresses assigned for your load balancers, bootstrap node, con
 
 If not already provided via the DHCP server, create static IP addresses for the load balancers.
 
-1. Configure the control plane load balancer
+1. In vSphere, turn on the load balancer. Then from the install node, ssh into the load balancer.
+**NOTE: Replace anything in [square brackets] with your values and remove the brackets**
 
-  1. The control plane server should proxy ports 6443 and 22623 with the bootstrap server and all master nodes as backend targets.  The mode should be `tcp`.
+   ```bash
+   ssh sysadmin@[ip address of load balancer]
+   ```
 
-  1. For an example configuration see Appendix C.
+2. Install `haproxy` package
 
-1. Configure the compute load balancer
+   ```bash
+   sudo apt install haproxy
+   ```
 
-  1. The compute server should proxy ports 443 and 80 with the compute/worker nodes as the backend servers.
+3. Now modify the `/etc/haproxy.conf`
+   - Configure the control plane load balancer
 
-  1. For an example configuration see Appendix C.
+      1. The control plane server should proxy ports 6443 and 22623 with the bootstrap server and all master nodes as backend targets.  The mode should be `tcp`.
+
+      2. For an example configuration see [Control plane haproxy.conf](#control-plane-haproxyconf).
+
+   - Configure the compute load balancer
+
+     1. The compute server should proxy ports 443 and 80 with the compute/worker nodes as the backend servers.
+
+     2. Here is an example of [Compute plane haproxy.conf](#compute-haproxyconf).
+
+   - You can also run only 1 loadbalancer for both control pane and compute nodes. Here is the config for [combined haproxy.conf](#combined-haproxyconf)
+
+4. Check the status of `haproxy`. It'll probably be dead initially.
+
+   ```bash
+   $ sudo systemctl status haproxy
+    ● haproxy.service - HAProxy Load Balancer
+    Loaded: loaded (/lib/systemd/system/haproxy.service; disabled; vendor preset: enabled)
+    Active: inactive (dead)
+        Docs: man:haproxy(1)
+            file:/usr/share/doc/haproxy/configuration.txt.gz
+   ```
+
+5. Now start `haproxy`. Also should do `systemctl enable haproxy` so that it starts up every time the load balancer restarts. If `haproxy` was not dead in the last step, use `restart` instead of `start`.
+
+    ```bash
+    sudo systemctl start haproxy  #if already running, try systemctl restart. To check status, do systemctl status
+    sudo systemctl enable haproxy
+    ```
+
+That's it. Load Balancer in configured.
 
 ### Boot your nodes
 
 Once you have the load balancers, dhcp server, and dns server configured, you can boot your cluster nodes and they will come up and configure themselves based on the ignition files you provided.
 
 1. Power on all nodes
-   * For optimal results you should power on the bootstrap node first. Connect to it using SSH and watch the logs using the command `journalctl -b -f -u bootkube.service` until you see the message `Waiting for etcd cluster...`
-   * When you see the message above you can start booting your master nodes.
-   * Finally boot your compute and storage nodes.
+   - For optimal results you should power on the bootstrap node first. Connect to it using SSH and watch the logs using the command `journalctl -b -f -u bootkube.service` until you see the message `Waiting for etcd cluster...`
+   - When you see the message above you can start booting your master nodes.
+   - Finally boot your compute and storage nodes.
 
   If you have everything configured properly, you should see the correct IP address for each node on the VMware console for each node, respectively.
 
 2. Issue the following command and wait for a completed result:
 
-  ```
-  [sysadmin@localhost opt]$ ./openshift-install --dir=./vhavard wait-for bootstrap-complete --log-level info
+  ```bash
+  ./openshift-install --dir=./vhavard wait-for bootstrap-complete --log-level info
   ```
 
   Anticipated result:
 
-  ```
+  ```bash
   INFO Waiting up to 30m0s for the Kubernetes API at https://api.vhavard.ocp.csplab.local:6443...
   INFO API v1.13.4+c2a5caf up                       
   INFO Waiting up to 30m0s for bootstrapping to complete...
   INFO It is now safe to remove the bootstrap resources
   ```
 
-You can watch the installation progress by logging into the bootstrap server and use journalctl.
+You can watch the installation progress by logging into the bootstrap server and use journalctl. Because of the ssh key you provided in the install-config.yaml you can ssh directly to the bootstrap node without credentials:
 
-Because of the ssh key you provided in the install-config.yaml you can ssh directly to the bootstrap node without credentials:
-
-  ```
+  ```bash
   ssh core@bootstrap.vhavard.ocp.csplab.local
   ```
 
-Where bootstrap.vhavard.ocp.csplab.local is the hostname or IP address of your bootstrap server.
+Where `bootstrap.vhavard.ocp.csplab.local` is the hostname or IP address of your bootstrap server. Once logged in, you can monitor progress with the following command:
 
-Once logged in, you can monitor progress with the following command:
-
-  ```
+  ```bash
   journalctl -b -f -u bootkube.service
   ```
 
-Installation normally take about 30 minutes.
-
-If you do not get a completed result then you need to troubleshoot what is failing.  Watching the logs on the bootstrap server as noted above can give you information about what is failing.
+Installation normally take about 30 minutes. If you do not get a completed result then you need to troubleshoot what is failing.  Watching the logs on the bootstrap server as noted above can give you information about what is failing.
 
 You can also ssh to one of the master nodes and execute `journalctl -f` to watch the logfile for potential errors.
 
 You may also find it helpful to watch the traffic going through the control plane load balancer (e.g. via the haproxy log files).  You should see traffic from all nodes as they pull configuration information from the bootstrap node.  You may be able to see errors here if there are configuration issues with any of the specific nodes or the bootstrap node.
+
+**NOTE:** If you want to create a cluster with only 1 master node, 2 `etcd-quorum-guard` pods will be in pending state and will not work properly. The purpose of these pods are to maintain quorum for etcd. It expects at least 2 master nodes to be available to work properly. To scale down the deployment and avoid this run the following commands:
+
+```bash
+$ oc patch clusterversion/version --type='merge' -p "$(cat <<- EOF
+spec:
+  overrides:
+    - group: apps/v1
+      kind: Deployment
+      name: etcd-quorum-guard
+      namespace: openshift-machine-config-operator
+      unmanaged: true
+EOF
+)"
+clusterversion.config.openshift.io/version patched
+
+$ oc scale --replicas=1 deployment/etcd-quorum-guard -n openshift-machine-config-operator
+deployment.extensions/etcd-quorum-guard scaled
+```
 
 ## Remove bootstrap server from control plane load balancer
 
@@ -1473,9 +1525,9 @@ host vhavard-compute-2 {
 
 ## Appendix C - Example haproxy comfiguration
 
-1. Control plane haproxy.conf
+### Control plane haproxy.conf
 
-  ```
+  ```conf
   global
       log         127.0.0.1 local2
 
@@ -1548,9 +1600,9 @@ host vhavard-compute-2 {
       server  master3 172.18.1.4:22623 check
   ```
 
-1. Compute haproxy.conf
+### Compute haproxy.conf
 
-  ```
+  ```conf
   global
       log         127.0.0.1 local2
       chroot      /var/lib/haproxy
@@ -1618,6 +1670,102 @@ host vhavard-compute-2 {
       server  worker2 172.18.1.6:80 check
       server  worker3 172.18.1.7:80 check
   ```
+
+### Combined haproxy.conf
+
+```conf
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    # Default SSL material locations
+    ca-base /etc/ssl/certs
+    crt-base /etc/ssl/private
+    # Default ciphers to use on SSL-enabled listening sockets.
+    # For more information, see ciphers(1SSL). This list is from:
+    #  https://hynek.me/articles/hardening-your-web-servers-ssl-ciphers/
+#   ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS
+#   ssl-default-bind-options no-sslv3
+    ssl-default-bind-ciphers PROFILE=SYSTEM
+    ssl-default-server-ciphers PROFILE=SYSTEM
+defaults
+    log global
+    mode    http
+    option  httplog
+    option  dontlognull
+    retries 3
+        timeout http-request  10s
+        timeout queue  1m
+        timeout connect 10s
+        timeout client  1m
+        timeout server  1m
+        timeout http-keep-alive  10s
+        timeout check  10s
+    maxconn 3000
+frontend api
+    bind *:6443
+    mode tcp
+    default_backend     api
+frontend machine-config
+    bind *:22623
+    mode tcp
+    default_backend     machine-config
+frontend http
+    bind *:80
+    mode http
+    default_backend     http
+frontend https
+    bind *:443
+    mode tcp
+    default_backend https
+backend api
+    mode tcp
+    balance roundrobin
+    server bootstrap       <IP Address>:6443 check
+    server control-plane-0 <IP Address>:6443 check
+    server control-plane-1 <IP Address>:6443 check
+    server control-plane-2 <IP Address>:6443 check
+backend machine-config
+    mode tcp
+    balance roundrobin
+    server bootstrap       <IP address>:22623 check
+    server control-plane-0 <IP address>:22623 check
+    server control-plane-1 <IP address>:22623 check
+    server control-plane-2 <IP address>:22623 check
+backend http
+    balance roundrobin
+    mode    http
+    server  compute1 <IP address>:80 check
+    server  compute2 <IP address>:80 check
+    server  compute3 <IP address>:80 check
+    server  compute4 <IP address>:80 check
+    server  compute5 <IP address>:80 check
+    server  compute6 <IP address>:80 check
+    server  compute7 <IP address>:80 check
+    server  compute8 <IP address>:80 check
+    server  storage1 <IP address>:80 check
+    server  storage2 <IP address>:80 check
+    server  storage3 <IP address>:80 check
+backend https
+    balance roundrobin
+    mode tcp
+    server  compute1 <IP Address>:443 check
+    server  compute2 <IP Address>:443 check
+    server  compute3 <IP Address>:443 check
+    server  compute4 <IP Address>:443 check
+    server  compute5 <IP Address>:443 check
+    server  compute6 <IP Address>:443 check
+    server  compute7 <IP Address>:443 check
+    server  compute8 <IP Address>:443 check
+    server  storage1 <IP Address>:443 check
+    server  storage2 <IP Address>:443 check
+    server  storage3 <IP Address>:443 check
+```
 ----
 ## Appendix D - Useful Ceph Commands
 
