@@ -1,27 +1,26 @@
-# User Provisioned Installation of Red Hat OpenShift 4.x on VMware Virtual Infrastructure
+# User Provisioned Installation of Red Hat OpenShift 4.x on VMware Virtual Infrastructure <!-- omit in toc -->
 
-- [User Provisioned Installation of Red Hat OpenShift 4.x on VMware Virtual Infrastructure](#user-provisioned-installation-of-red-hat-openshift-4x-on-vmware-virtual-infrastructure)
-  - [Introduction](#introduction)
-  - [Terminology](#terminology)
-  - [Basic Install Steps for VMware](#basic-install-steps-for-vmware)
-  - [Preparation](#preparation)
-    - [Create the Installation Server](#create-the-installation-server)
-    - [VMware Installation Specifics](#vmware-installation-specifics)
-      - [Create the 'append-bootstrap.ign' File](#create-the-append-bootstrapign-file)
-      - [Create the RHCOS Template in vSphere](#create-the-rhcos-template-in-vsphere)
-      - [Configure vCenter and Create your Cluster Nodes](#configure-vcenter-and-create-your-cluster-nodes)
-    - [Note the MAC addresses for all of your VMs.](#note-the-mac-addresses-for-all-of-your-vms)
-    - [Provision your external load balancers](#provision-your-external-load-balancers)
-    - [Configure the DHCP server](#configure-the-dhcp-server)
-    - [Configure the DNS Server](#configure-the-dns-server)
-    - [Configure your haproxy nodes (load balancers)](#configure-your-haproxy-nodes-load-balancers)
-      - [Boot your nodes](#boot-your-nodes)
-  - [Remove bootstrap server from control plane load balancer](#remove-bootstrap-server-from-control-plane-load-balancer)
-  - [Login to the ocp cluster](#login-to-the-ocp-cluster)
-  - [Make sure all nodes are in Ready status](#make-sure-all-nodes-are-in-ready-status)
-  - [Make sure all controllers are up](#make-sure-all-controllers-are-up)
-  - [Configure Storage for the image-registry Operator](#configure-storage-for-the-image-registry-operator)
-  - [Ensure cluster is up and ready](#ensure-cluster-is-up-and-ready)
+- [Introduction](#introduction)
+- [Terminology](#terminology)
+- [Basic Install Steps for VMware](#basic-install-steps-for-vmware)
+- [Installation Process Topology](#installation-process-topology)
+- [Networking requirements for user-provisioned infrastructure](#networking-requirements-for-user-provisioned-infrastructure)
+- [Create the Installation Server](#create-the-installation-server)
+- [VMware Installation Specifics](#vmware-installation-specifics)
+  - [Create the RHCOS Template in vSphere](#create-the-rhcos-template-in-vsphere)
+  - [Configure vCenter and Create your Cluster Nodes](#configure-vcenter-and-create-your-cluster-nodes)
+  - [Note the MAC addresses for all of your VMs.](#note-the-mac-addresses-for-all-of-your-vms)
+  - [Provision your external load balancers](#provision-your-external-load-balancers)
+  - [Configure the DHCP server](#configure-the-dhcp-server)
+  - [Configure the DNS Server](#configure-the-dns-server)
+  - [Configure your haproxy nodes (load balancers)](#configure-your-haproxy-nodes-load-balancers)
+  - [Boot your nodes](#boot-your-nodes)
+- [Remove bootstrap server from control plane load balancer](#remove-bootstrap-server-from-control-plane-load-balancer)
+- [Login to the ocp cluster](#login-to-the-ocp-cluster)
+- [Make sure all nodes are in Ready status](#make-sure-all-nodes-are-in-ready-status)
+- [Make sure all controllers are up](#make-sure-all-controllers-are-up)
+- [Configure Storage for the image-registry Operator](#configure-storage-for-the-image-registry-operator)
+- [Ensure cluster is up and ready](#ensure-cluster-is-up-and-ready)
 - [Post-Install Tasks to Have a Usable Cluster](#post-install-tasks-to-have-a-usable-cluster)
 - [Appendix A - Example DNS Configuration](#appendix-a---example-dns-configuration)
   - [named.conf.local](#namedconflocal)
@@ -37,9 +36,10 @@
 - [Appendix E - Adding a new node to an existing cluster](#appendix-e---adding-a-new-node-to-an-existing-cluster)
 
 ## Introduction
+
 Installing OpenShift (OCP) 4.x requires a significant amount of pre-planning and infrastructure preparation.
 
-In this guide we will install a small OpenShift 4.2 instance.  We will use an installation server with an embedded web server.  Our cluster will consist of a bootstrap node, 3 master nodes, 3 worker nodes, 2 load balancers.  The installation server and bootstrap server can be deleted when the installation is complete, however you may want to keep the installation server around for future installs.
+In this guide we will install a small OpenShift 4.3 instance.  We will use an installation server with an embedded web server.  Our cluster will consist of a bootstrap node, 1 master node, 5 worker nodes, 1 load balancer.  The installation server and bootstrap server can be deleted when the installation is complete, however you may want to keep the installation server around for future installs.
 
 This document will contain information for installing in a VMware vSphere environment.
 
@@ -50,6 +50,7 @@ For UPI, Red Had provides an installer for VMware environments which use vCenter
 This document will *not* describe doing an IPI installation.
 
 ## Terminology
+
 * __Host__ - A physical machine with a hypervisor installed which can be used to host one or more virtual machines.
 * __Server__ - A physical or virtual machine that is used to provide services to other machines.
 * __Workstation__ - A physical or virtual machine that is typically used by a single person as a desktop on which work can be done.  This is typically a laptop, desktop, or virtual machine provided by some technology such as Citrix.
@@ -62,11 +63,10 @@ Installation in a UPI environment includes the following basic steps:
 In this guide we will use the following topology:
 
 * Installation server (with webserver installed)
-* 1 load balancer for the control control plane (master nodes)
-* 1 load balancer for the compute nodes (worker nodes)
+* 1 load balancer for both the control control plane (master nodes) and compute nodes (worker nodes)
 * 1 Bootstrap node
-* 3 control plane nodes (master nodes)
-* 3 compute nodes (worker nodes)
+* 1 control plane nodes (master nodes)
+* 5 compute nodes (worker nodes)
 
 **Notes**
 
@@ -91,18 +91,25 @@ Each installation will simply be represented by a new folder under your `/opt` d
   13. Complete installation
   14. Login to your new cluster and configure authentication
 
-<br>
-We will discuss each of these in turn in the rest of this document.
+  We will discuss each of these in turn in the rest of this document.
 
-## Preparation
+## Installation Process Topology
 
-### Create the Installation Server
+Because each machine in the cluster requires information about the cluster when it is provisioned, OpenShift Container Platform uses a temporary bootstrap machine during initial configuration to provide the required information to the permanent control plane. It boots by using an Ignition config file that describes how to create the cluster. The bootstrap machine creates the master machines that make up the control plane. The control plane machines then create the compute machines, which are also known as worker machines. The following figure illustrates this process:
+
+![Installation Process Topology](/images/install_process_overview.png "Create VM from Template")
+
+## Networking requirements for user-provisioned infrastructure
+
+The networking requirements are specified here <https://docs.openshift.com/container-platform/4.3/installing/installing_vsphere/installing-vsphere.html#network-connectivity_installing-vsphere>
+
+## Create the Installation Server
 
 1. Create a new virtual machine which is network accessible from the location where your OCP cluster will run.  Only the basic server packages are needed, no UI is needed.  This guide will assume this server is running RHEL 8.0.
 
-1. Either register with subscription manager or create a local yum repository so needed packages can be installed.
+2. Either register with subscription manager or create a local yum repository so needed packages can be installed.
 
-1. Disable the firewall and selinux (or open a hole for port 80)
+3. Disable the firewall and selinux (or open a hole for port 80)
 
     ```bash
     # Stop the firewall and set selinux to passive
@@ -114,13 +121,13 @@ We will discuss each of these in turn in the rest of this document.
     sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
     ```
 
-1. Create a directory for your new cluster.  In this document I will use a cluster named after my userid `vhavard`.
+4. Create a directory for your new cluster.  In this document I will use a cluster named after my userid `vhavard`.
 
     ```bash
     mkdir /opt/vhavard
     ```
 
-1. Install the httpd web server
+5. Install the httpd web server
 
     ```bash
     yum install -y httpd
@@ -132,7 +139,7 @@ We will discuss each of these in turn in the rest of this document.
     ln -s /opt/vhavard /var/www/html/vhavard
     ```
 
-1. Download the OpenShift client and installer and explode it into your /opt directory.  Use your browser to follow the following link and download the client and installer tarballs for the latest release version
+6. Download the OpenShift client and installer and explode it into your /opt directory.  Use your browser to follow the following link and download the client and installer tarballs for the latest release version
 
     <https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/>
 
@@ -151,38 +158,38 @@ We will discuss each of these in turn in the rest of this document.
     sudo cp kubectl /usr/local/bin/
     ```
 
-2. Create an ssh key for your primary user and accept the default location for the file.
+7. Create an ssh key for your primary user and accept the default location for the file.
 
     ```bash
     ssh-keygen -t rsa -b 4096 -N ''
     ```
 
-1. Start the ssh agent
+8. Start the ssh agent
 
     ```bash
     eval "$(ssh-agent -s )"
     ```
 
-1. Add your private key to the ssh-agent
+9.  Add your private key to the ssh-agent
 
     ```bash
     ssh-add ~/.ssh/id_rsa
     ```
 
-1. You will need a pull secret so your cluster can download the needed containers.  Get your pull secret from https://cloud.redhat.com/openshift/install/vsphere/user-provisioned and put it into a file in your /opt directory (e.g. pull-secret.txt).  You will need this in the next step.
+10. You will need a pull secret so your cluster can download the needed containers.  Get your pull secret from https://cloud.redhat.com/openshift/install/vsphere/user-provisioned and put it into a file in your /opt directory (e.g. pull-secret.txt).  You will need this in the next step.
 
-1. In your project directory, create a file named `install-config.yaml` with the following contents (_expand the section for your target environment_):
+11. In your project directory, create a file named `install-config.yaml` with the following contents (_expand the section for your target environment_):
   **IMPORTANT:** _Replace values in square brackets in the text below (including the square brackets) with values from your environment._
 
     ```yaml
     apiVersion: v1
     baseDomain: [ocp.csplab.local]
     compute:
-    - hyperthreading: Enabled   
+    - hyperthreading: Enabled
       name: worker
       replicas: 0
     controlPlane:
-      hyperthreading: Enabled   
+      hyperthreading: Enabled
       name: master
       replicas: 3
     metadata:
@@ -246,49 +253,49 @@ We will discuss each of these in turn in the rest of this document.
 
     All nodes which will also be used as storage nodes will need a second hard disk provisioned (the installer will only use /dev/sda).  This second hard disk will be /dev/sdb and will be used by Ceph when installing the Ceph storage cluster.  You can also add more than one additional disk to be used by the Ceph storage cluster, but only one is required.
 
-### VMware Installation Specifics
+1. Create the 'append-bootstrap.ign' File
 
-#### Create the 'append-bootstrap.ign' File
+    The bootstrap.ign file is too large to be used when deploying the VMs as documented below so you will need to create a smaller file which will cause the VMware server to grab this file from the webserver you configured on the installation server.  Because we created a softlink for our project folder, the file is already accessible for download.  We just need to create the `append-bootstrap.ign` file for use when we deploy our bootstrap node.
 
-  The bootstrap.ign file is too large to be used when deploying the VMs as documented below so you will need to create a smaller file which will cause the VMware server to grab this file from the webserver you configured on the installation server.  Because we created a softlink for our project folder, the file is already accessible for download.  We just need to create the `append-bootstrap.ign` file for use when we deploy our bootstrap node.
+    In your project folder (e.g. /opt/vhavard), create a new file named append-bootstrap.ign with the following contents:
 
-  In your project folder (e.g. /opt/vhavard), create a new file named append-bootstrap.ign with the following contents:
+    <strong>IMPORTANT:</strong> _Replace the URL in the square brackets (including the square brackets) with the URL to the bootstarp.ign file on your web server/installation server._
 
-  <strong>IMPORTANT:</strong> _Replace the URL in the square brackets (including the square brackets) with the URL to the bootstarp.ign file on your web server/installation server._
-
-  ```json
-  {
-  "ignition": {
-    "config": {
-      "append": [
-        {
-          "source": <"http://172.18.1.30/vhavard/bootstrap.ign">,
-          "verification": {}
-        }
-      ]
+    ```json
+    {
+    "ignition": {
+      "config": {
+        "append": [
+          {
+            "source": <"http://172.18.1.30/vhavard/bootstrap.ign">,
+            "verification": {}
+          }
+        ]
+      },
+      "timeouts": {},
+      "version": "2.1.0"
     },
-    "timeouts": {},
-    "version": "2.1.0"
-  },
-  "networkd": {},
-  "passwd": {},
-  "storage": {},
-  "systemd": {}
-  }
-  ```
+    "networkd": {},
+    "passwd": {},
+    "storage": {},
+    "systemd": {}
+    }
+    ```
 
-  Where `source` is the URL where the vCenter server can download the bootstrap.ign file (from your locally running web server).
+    Where `source` is the URL where the vCenter server can download the bootstrap.ign file (from your locally running web server).
 
-  The ignition files will need to be encoded into base64 strings so they can be placed in a form blank.  In the /opt/<project> directory (e.g. /opt/vhavard), encode master.ign, worker.ign, and append-bootstrap.ign into base64 strings.
+    The ignition files will need to be encoded into base64 strings so they can be placed in a form blank.  In the /opt/<project> directory (e.g. /opt/vhavard), encode master.ign, worker.ign, and append-bootstrap.ign into base64 strings.
 
-  ```
-  cd /opt/vhavard
-  base64 -w0 append-bootstrap.ign > append-bootstrap.base64
-  base64 -w0 master.ign > master.base64
-  base64 -w0 worker.ign > worker.base64
-  ```
+    ```bash
+    cd /opt/vhavard
+    base64 -w0 append-bootstrap.ign > append-bootstrap.base64
+    base64 -w0 master.ign > master.base64
+    base64 -w0 worker.ign > worker.base64
+    ```
 
-  #### Create the RHCOS Template in vSphere
+## VMware Installation Specifics
+
+### Create the RHCOS Template in vSphere
 
   From any computer, download the openshift 4.x VMware template and store it locally.
 
@@ -304,7 +311,7 @@ We will discuss each of these in turn in the rest of this document.
 
   Continue to use the wizard to upload your template.  Remember where you put it because you will use it in the next step.
 
-  #### Configure vCenter and Create your Cluster Nodes
+### Configure vCenter and Create your Cluster Nodes
 
   <strong>NOTE:</strong> You will need at the very least, 1 bootstrap node, and 3 control plane (master) nodes, and 2 compute (worker) nodes.  It is recommended that you use exactly 3 control plane nodes and a minimum of 2 compute nodes.  
 
@@ -366,7 +373,7 @@ We will discuss each of these in turn in the rest of this document.
 
   Repeat these steps for each node in your cluster.  For the master/control plan nodes use the master.base64 ignition file and for the compute/worker nodes use the worker.base64 text.
 
-  ### Note the MAC addresses for all of your VMs.
+### Note the MAC addresses for all of your VMs.
 
   You will need to know the MAC address for each of the nodes you just created.
 
@@ -476,7 +483,7 @@ If not already provided via the DHCP server, create static IP addresses for the 
 
   1. For an example configuration see Appendix C.
 
-#### Boot your nodes
+### Boot your nodes
 
 Once you have the load balancers, dhcp server, and dns server configured, you can boot your cluster nodes and they will come up and configure themselves based on the ignition files you provided.
 
@@ -1167,7 +1174,7 @@ INFO Login to the console with user: kubeadmin, password: wSbzT-DCZCU-BRYF7-C7bX
 
 Login to your new cluster as kubeadmin with the credentials output to the screen.  If you lose that screen output, the same information can be found on your installation server in the `<projectdir>/auth/kubeadmin-password` file.
 
-# Post-Install Tasks to Have a Usable Cluster
+## Post-Install Tasks to Have a Usable Cluster
 <details>
 <summary>
 1. Integrating with Microsoft Active Directory for authentication
@@ -1263,9 +1270,9 @@ You can also sync local groups from LDAP groups.  For more information see: http
 </details>
 
 ----
-# Appendix A - Example DNS Configuration
+## Appendix A - Example DNS Configuration
 
-## named.conf.local
+### named.conf.local
 
 ```
 //
@@ -1281,7 +1288,7 @@ zone "vhavard.ocp.csplab.local" { type master; file "/etc/bind/db.vhavard.ocp.cs
 zone "18.172.in-addr.arpa" { type master; file "/etc/bind/db.172.18"; };
 ```
 
-## db.172.18
+### db.172.18
 
 ```
 $TTL    86400 ; 24 hours, could have been written as 24h or 1d
@@ -1318,7 +1325,7 @@ $ORIGIN 1.18.172.IN-ADDR.ARPA.
 30       IN  PTR    installer.vhavard.ocp.csplab.local.
 ```
 
-## db.vhavard.ocp.csplab.local
+### db.vhavard.ocp.csplab.local
 
 ```
 ;
@@ -1361,9 +1368,9 @@ _etcd-server-ssl._tcp.vhavard.ocp.csplab.local  86400 IN    SRV 0        10     
 ```
 
 ----
-# Appendix B - Example DHCP configuration
+## Appendix B - Example DHCP configuration
 
-## dhcpd.conf
+### dhcpd.conf
 
 ```
 shared-network ocp {
@@ -1464,7 +1471,7 @@ host vhavard-compute-2 {
 
 ----
 
-# Appendix C - Example haproxy comfiguration
+## Appendix C - Example haproxy comfiguration
 
 1. Control plane haproxy.conf
 
@@ -1612,9 +1619,9 @@ host vhavard-compute-2 {
       server  worker3 172.18.1.7:80 check
   ```
 ----
-# Appendix D - Useful Ceph Commands
+## Appendix D - Useful Ceph Commands
 
-## Gaining access to the rook/Ceph toolbox container
+### Gaining access to the rook/Ceph toolbox container
 To gain access to the rook/Ceph tools container use the following command:
 
 ```
@@ -1629,7 +1636,7 @@ To see the health of your cluster execute:
 ceph -s
 ```
 
-## Dealing with the `Too FEW PGs` warning
+### Dealing with the `Too FEW PGs` warning
 If you receive a message indicating you do not have enough PG's (Placement Groups), you can increase them.  Note, however, that this is a warning and not an error.  Calculating the proper number of PGs to use for any given Ceph cluster at any given point in time based on the number of OSDs and pools, etc. is beyond the scope of this document, however, you can make this error go away by increasing the number of PGs defined for a pool as follows.
 
 First, list the pools you have in your ceph cluster by issuing the command `ceph osd lspools`.  This will list all the pools in your cluster.
@@ -1648,13 +1655,13 @@ sudo ceph osd pool set rbdpool pgp_num 64
 
 For more information about PGs and how to determine what this number should be see https://docs.ceph.com/docs/master/rados/operations/placement-groups/.
 
-## Listing block devices
+### Listing block devices
 
 ```
 rbd ls <poolname>
 ```
 ----
-# Appendix E - Adding a new node to an existing cluster
+## Appendix E - Adding a new node to an existing cluster
 Add a node to an existing 4.2 cluster with a CoreOS node
 
 1. Configure the machine/VM in the same way you did for the rest of the cluster.  There is no need to recreate the ignition files.  Use the same ignition files you used in the initial installation even if it has been more than 24 hours since they were created.
